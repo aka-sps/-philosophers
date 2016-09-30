@@ -107,11 +107,13 @@ public:
             state(States::thinks);
             std::this_thread::sleep_for(random_interval());
 
-            state(States::hungry);
-            while (std::try_lock(*m_p_left, *m_p_right) != -1) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            {
+                state(States::hungry);
+                std::unique_lock<decltype(m_mutex)> locker(m_mutex);
+                while (std::try_lock(*m_p_left, *m_p_right) != -1) {
+                    m_cv.wait(locker);
+                }
             }
-
             state(States::dines);
             std::this_thread::sleep_for(random_interval());
             m_p_left->unlock();
@@ -126,18 +128,21 @@ private:
     static std::chrono::milliseconds
         random_interval()
     {
-        static std::uniform_int_distribution<unsigned> distrigution(10, 3000);
+        static std::uniform_int_distribution<unsigned> distrigution(1, 10000);
         auto const rnd = distrigution(g_rnd);
         return std::chrono::milliseconds(rnd);
     }
     void state(States _state);
 
     std::atomic<States> m_state;
+    static std::mutex m_mutex;
+    static std::condition_variable m_cv;
     Canteen* m_p_canteen;
     Fork* m_p_left;
     Fork* m_p_right;
 };
-
+std::mutex Philosopher::m_mutex;
+std::condition_variable Philosopher::m_cv;
 
 class Canteen
 {
@@ -244,7 +249,7 @@ private:
             return ' ';
             break;
         case Philosopher::States::hungry:
-            return '=';
+            return '*';
             break;
         case Philosopher::States::dines:
             return '|';
@@ -259,15 +264,18 @@ private:
 
 void Philosopher::state(States _state)
 {
+    std::unique_lock<decltype(m_mutex)> locker(m_mutex);
     m_state = _state;
     m_p_canteen->log_state(this);
+    m_cv.notify_all();
 }
 }  // namespace philosophers
 
 int main(int argc, char* argv[])
 {
     try {
-        philosophers::Canteen_1 canteen(80);
+        unsigned const num_ph = argc < 2 ? 5 : atoi(argv[1]);
+        philosophers::Canteen_1 canteen(num_ph);
         canteen();
         return 0;
     } catch (std::exception const& exc) {
