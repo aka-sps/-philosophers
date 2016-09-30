@@ -15,4 +15,5 @@ target_compile_features(philosophers PUBLIC
     cxx_auto_type
     cxx_generalized_initializers
     cxx_override
+    cxx_nullptr
 )

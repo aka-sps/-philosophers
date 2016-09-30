@@ -91,45 +91,59 @@ public:
         hungry,
         dines
     };
-    Philosopher(Monitor* _p_canteen, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right)
-        : m_state(States::thinks)
-        , m_p_monitor(_p_canteen)
-        , m_p_left(_p_left)
+    Philosopher(std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen = nullptr)
+        : m_p_left(_p_left)
         , m_p_right(_p_right)
-    {
-    }
-
-    States state()const
-    {
-        return m_state;
-    }
+        , m_state(States::thinks)
+        , m_p_monitor(_p_canteen)
+    {}
 
     void operator()()
     {
         for (;;) {
-            state(States::thinks);
-            std::this_thread::sleep_for(random_interval());
-
-            {
-                state(States::hungry);
-                std::unique_lock<decltype(m_mutex)> locker(m_mutex);
-                while (std::try_lock(*m_p_left, *m_p_right) != -1) {
-                    m_cv.wait(locker);
-                }
+            try {
+                thinks();
+                aquire_forks();
+                eating();
+            } catch (...) {
+                /// ignored
             }
-            state(States::dines);
-            std::this_thread::sleep_for(random_interval());
-            m_p_left->unlock();
-            m_p_right->unlock();
         }
     }
+
     /// common thread worker
     static void worker(std::shared_ptr<Philosopher> const& _p_philosopfer)
     {
         (*_p_philosopfer)();
     }
 
+    States state()const
+    {
+        return m_state;
+    }
 private:
+    void thinks()
+    {
+        state(States::thinks);
+        std::this_thread::sleep_for(random_interval());
+    }
+
+    void aquire_forks()
+    {
+        state(States::hungry);
+        std::unique_lock<decltype(m_mutex)> locker(m_mutex);
+        while (-1 != std::try_lock(*m_p_left, *m_p_right)) {
+            m_cv.wait(locker);
+        }
+    }
+
+    void eating()
+    {
+        state(States::dines);
+        std::this_thread::sleep_for(random_interval());
+        m_p_left->unlock();
+        m_p_right->unlock();
+    }
     static std::chrono::milliseconds random_interval()
     {
         static std::uniform_int_distribution<unsigned> distrigution(1, 10000);
@@ -138,12 +152,13 @@ private:
     }
     inline void state(States _state);
 
-    std::atomic<States> m_state;
-    static std::mutex m_mutex;
-    static std::condition_variable m_cv;
-    Monitor* m_p_monitor;
     std::shared_ptr<Fork> m_p_left;
     std::shared_ptr<Fork> m_p_right;
+    std::atomic<States> m_state;
+    Monitor* m_p_monitor;
+
+    static std::mutex m_mutex;
+    static std::condition_variable m_cv;
 };
 
 std::mutex Philosopher::m_mutex;
@@ -207,13 +222,13 @@ public:
         }
         m_forks.reserve(_number_of_philosophers);
         std::generate_n(std::back_inserter(m_forks), _number_of_philosophers, []() {return std::make_shared<Fork>(); });
-        
+
         m_philosophers.reserve(_number_of_philosophers);
         for (unsigned i = 0; i < _number_of_philosophers; ++i) {
             m_philosophers.push_back(std::make_shared<Philosopher>(
-                &m_monitor,
                 m_forks[i],
-                m_forks[(i + 1) % _number_of_philosophers]));
+                m_forks[(i + 1) % _number_of_philosophers],
+                &m_monitor));
         }
     }
     void operator()()
