@@ -10,6 +10,7 @@
 #include <memory>
 #include <thread>
 #include <iterator>
+#include <string>
 
 namespace philosophers {
 
@@ -169,10 +170,35 @@ public:
         for (unsigned i = 0; i < number_of_philosophers(); ++i) {
             threads.push_back(std::thread(Philosopher::worker, philosophers[i]));
         }
-        logger();
+        log_worker();
     }
+
+protected:
+    typedef std::vector<state_log_element_type> log_queue_type;
+    virtual void monitor(log_queue_type const& work_log)
+    {
+        for (auto el : work_log) {
+            std::cout << "Philosopher #" << el.first << " ";
+            switch (el.second) {
+            case Philosopher::States::thinks:
+                std::cout << "thinks";
+                break;
+            case Philosopher::States::hungry:
+                std::cout << "hungry";
+                break;
+            case Philosopher::States::dines:
+                std::cout << "dines";
+                break;
+            default:
+                std::cout << "?????";
+                break;
+            }
+            std::cout << std::endl;
+        }
+    }
+
 private:
-    void logger()
+    void log_worker()
     {
         for (;;) {
             decltype(m_log_queue) work_log;
@@ -183,30 +209,50 @@ private:
                 }
                 std::swap(work_log, m_log_queue);
             }
-            for (auto el : work_log) {
-                std::cout << "Philosopher #" << el.first << " ";
-                switch (el.second) {
-                case Philosopher::States::thinks:
-                    std::cout << "thinks";
-                    break;
-                case Philosopher::States::hungry:
-                    std::cout << "hungry";
-                    break;
-                case Philosopher::States::dines:
-                    std::cout << "dines";
-                    break;
-                default:
-                    std::cout << "?????";
-                    break;
-                }
-                std::cout << std::endl;
-            }
+            monitor(work_log);
         }
     }
+    
     unsigned m_number_of_philosophers;
     std::mutex m_log_queue_mutex;
     std::condition_variable m_cv;
-    std::vector<state_log_element_type> m_log_queue;
+    log_queue_type m_log_queue;
+};
+
+class Canteen_1
+    : public Canteen
+{
+public:
+    Canteen_1(unsigned _number_of_philosophers = 5)
+        : Canteen(_number_of_philosophers)
+        , m_buffer(_number_of_philosophers, symb(Philosopher::States::thinks))
+    {}
+    virtual void monitor(log_queue_type const& work_log)override
+    {
+        for (auto el : work_log) {
+            m_buffer[el.first] = symb(el.second);
+        }
+        std::cout << m_buffer << std::endl;
+    }
+private:
+    static char symb(Philosopher::States _state)
+    {
+        switch (_state) {
+        case Philosopher::States::thinks:
+            return ' ';
+            break;
+        case Philosopher::States::hungry:
+            return '=';
+            break;
+        case Philosopher::States::dines:
+            return '|';
+            break;
+        default:
+            return '?';
+            break;
+        }
+    }
+    std::string m_buffer;
 };
 
 void Philosopher::state(States _state)
@@ -219,7 +265,7 @@ void Philosopher::state(States _state)
 int main(int argc, char* argv[])
 {
     try {
-        philosophers::Canteen canteen(5);
+        philosophers::Canteen_1 canteen(80);
         canteen();
         return 0;
     } catch (std::exception const& exc) {
