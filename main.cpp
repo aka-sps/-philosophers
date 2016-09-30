@@ -123,7 +123,7 @@ public:
             m_p_right->unlock();
         }
     }
-    static void worker(std::shared_ptr<Philosopher> p_philosopfer)
+    static void worker(Philosopher* p_philosopfer)
     {
         (*p_philosopfer)();
     }
@@ -167,20 +167,19 @@ public:
     }
     void operator()()
     {
-        std::vector<std::shared_ptr<Fork> > forks;
-        std::generate_n(std::back_inserter(forks), number_of_philosophers(), []() {return std::make_shared<Fork>(); });
-        std::vector<std::shared_ptr<Philosopher> > philosophers;
+        std::vector<std::unique_ptr<Fork> > forks;
+        std::generate_n(std::back_inserter(forks), number_of_philosophers(), []() {return std::make_unique<Fork>(); });
+        std::vector<std::unique_ptr<Philosopher> > philosophers;
         for (unsigned i = 0; i < number_of_philosophers(); ++i) {
-            Fork* p_left = forks[i].get();
-            Fork* p_right = forks[(i + 1) % number_of_philosophers()].get();
-            philosophers.push_back(std::make_shared<Philosopher>(this, p_left, p_right));
+            Fork* const p_left = forks[i].get();
+            Fork* const p_right = forks[(i + 1) % number_of_philosophers()].get();
+            philosophers.push_back(std::make_unique<Philosopher>(this, p_left, p_right));
         }
 
         std::vector<std::thread> threads;
         threads.reserve(number_of_philosophers());
-        for (unsigned i = 0; i < number_of_philosophers(); ++i) {
-            threads.push_back(std::thread(Philosopher::worker, philosophers[i]));
-        }
+        std::transform(philosophers.cbegin(), philosophers.cend(), std::back_inserter(threads),
+                       [](decltype(philosophers)::value_type const& ptr) {return std::thread(Philosopher::worker, ptr.get()); });
         log_worker();
     }
 
@@ -211,8 +210,8 @@ protected:
 private:
     void log_worker()
     {
+        decltype(m_log_queue) work_log;
         for (;;) {
-            decltype(m_log_queue) work_log;
             {
                 std::unique_lock<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
                 while (m_log_queue.empty()) {
@@ -221,6 +220,7 @@ private:
                 std::swap(work_log, m_log_queue);
             }
             monitor(work_log);
+            work_log.clear();
         }
     }
     
