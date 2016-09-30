@@ -108,7 +108,9 @@ public:
             std::this_thread::sleep_for(random_interval());
 
             state(States::hungry);
-            std::lock(*m_p_left, *m_p_right);
+            while (std::try_lock(*m_p_left, *m_p_right) != -1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
 
             state(States::dines);
             std::this_thread::sleep_for(random_interval());
