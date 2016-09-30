@@ -14,6 +14,7 @@
 
 namespace philosophers {
 
+/// @brief Multithread random generator protected by mutex
 class Random_generator
     : public std::default_random_engine
 {
@@ -35,6 +36,8 @@ private:
 
 Random_generator g_rnd;
 
+
+/// @brief Generator of sequential ID
 template<typename id_type = unsigned>
 class ID_generator
 {
@@ -52,6 +55,7 @@ private:
     std::atomic<id_type> m_id;
 };
 
+/// @brief Objects with sequential ID
 template<typename Tag, typename id_type = unsigned>
 class Object_with_id
 {
@@ -72,10 +76,9 @@ private:
 template<typename Tag, typename id_type>
 ID_generator<id_type> Object_with_id<Tag, id_type>::m_generator;
 
-class Fork
-    : public Object_with_id<Fork>
-    , public std::mutex
-{};
+
+/// Fork is simple mutex
+typedef std::mutex Fork;
 
 class Canteen;
 
@@ -144,6 +147,7 @@ private:
 std::mutex Philosopher::m_mutex;
 std::condition_variable Philosopher::m_cv;
 
+/// Canteen with simple text log
 class Canteen
 {
     typedef std::pair<unsigned, Philosopher::States> state_log_element_type;
@@ -226,11 +230,12 @@ private:
     log_queue_type m_log_queue;
 };
 
-class Canteen_1
+/// Canteen with waterfall states log
+class Canteen_waterfall
     : public Canteen
 {
 public:
-    Canteen_1(unsigned _number_of_philosophers = 5)
+    Canteen_waterfall(unsigned _number_of_philosophers = 5)
         : Canteen(_number_of_philosophers)
         , m_buffer(_number_of_philosophers, symb(Philosopher::States::thinks))
     {}
@@ -275,7 +280,7 @@ int main(int argc, char* argv[])
 {
     try {
         unsigned const num_ph = argc < 2 ? 5 : atoi(argv[1]);
-        philosophers::Canteen_1 canteen(num_ph);
+        philosophers::Canteen_waterfall canteen(num_ph);
         canteen();
         return 0;
     } catch (std::exception const& exc) {
