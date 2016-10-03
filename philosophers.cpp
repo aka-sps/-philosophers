@@ -35,53 +35,12 @@ private:
 
 Random_generator g_rnd;
 
-
-/// @brief Generator of sequential ID
-template<typename id_type = unsigned>
-class ID_generator
-{
-public:
-    ID_generator()
-        : m_id(0)
-    {}
-    id_type
-        operator()()
-    {
-        return m_id++;
-    }
-
-private:
-    id_type m_id;
-};
-
-/// @brief Objects with sequential ID
-template<typename Tag, typename id_type = unsigned>
-class Object_with_id
-{
-public:
-    Object_with_id()
-        : m_id(m_generator())
-    {}
-    id_type id()const
-    {
-        return m_id;
-    }
-
-private:
-    static ID_generator<id_type> m_generator;
-    id_type m_id;
-};
-
-template<typename Tag, typename id_type>
-ID_generator<id_type> Object_with_id<Tag, id_type>::m_generator;
-
 /// Fork is simple mutex
 typedef std::mutex Fork;
 
 class Monitor;
 
 class Philosopher
-    : public Object_with_id<Philosopher>
 {
 public:
     enum class States
@@ -90,13 +49,18 @@ public:
         hungry,
         dines
     };
-    Philosopher(std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen = nullptr)
-        : m_p_left(_p_left)
+    Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen = nullptr)
+        : m_id(_id)
+        , m_p_left(_p_left)
         , m_p_right(_p_right)
         , m_state(States::thinks)
         , m_p_monitor(_p_canteen)
     {}
 
+    unsigned id()const
+    {
+        return m_id;
+    }
     void operator()()
     {
         for (;;) {
@@ -151,6 +115,7 @@ private:
     }
     inline void state(States _state);
 
+    unsigned m_id;
     std::shared_ptr<Fork> m_p_left;
     std::shared_ptr<Fork> m_p_right;
     States m_state;
@@ -219,14 +184,16 @@ public:
         if (_number_of_philosophers < 2) {
             throw std::invalid_argument("Invalid number of philosophers (<2)");
         }
-        m_forks.reserve(_number_of_philosophers);
-        std::generate_n(std::back_inserter(m_forks), _number_of_philosophers, []() {return std::make_shared<Fork>(); });
+        std::vector<std::shared_ptr<Fork> > forks;
+        forks.reserve(_number_of_philosophers);
+        std::generate_n(std::back_inserter(forks), _number_of_philosophers, []() {return std::make_shared<Fork>(); });
 
         m_philosophers.reserve(_number_of_philosophers);
         for (unsigned i = 0; i < _number_of_philosophers; ++i) {
             m_philosophers.push_back(std::make_shared<Philosopher>(
-                m_forks[i],
-                m_forks[(i + 1) % _number_of_philosophers],
+                i,
+                forks[i],
+                forks[(i + 1) % _number_of_philosophers],
                 &m_monitor));
         }
     }
@@ -240,7 +207,6 @@ public:
     }
 
 private:
-    std::vector<std::shared_ptr<Fork> > m_forks;
     std::vector<std::shared_ptr<Philosopher> > m_philosophers;
     TyMonitor m_monitor;
 };
