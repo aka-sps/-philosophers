@@ -1,7 +1,6 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
-#include <atomic>
 #include <random>
 #include <chrono>
 #include <algorithm>
@@ -52,7 +51,7 @@ public:
     }
 
 private:
-    std::atomic<id_type> m_id;
+    id_type m_id;
 };
 
 /// @brief Objects with sequential ID
@@ -154,7 +153,7 @@ private:
 
     std::shared_ptr<Fork> m_p_left;
     std::shared_ptr<Fork> m_p_right;
-    std::atomic<States> m_state;
+    States m_state;
     Monitor* m_p_monitor;
 
     static std::mutex m_mutex;
