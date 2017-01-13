@@ -9,6 +9,7 @@
 #include <iterator>
 #include <string>
 
+#undef DEATH
 namespace philosophers {
 
 /// Fork is simple mutex
@@ -19,7 +20,6 @@ class Monitor;
 class Philosopher
 {
 public:
-    static unsigned const max_interval_ms = 10000;
     enum class States
     {
         thinks,
@@ -30,8 +30,9 @@ public:
 #endif
     };
 
-    Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen = nullptr)
-        : m_id(_id)
+    Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen, unsigned _max_interval_ms)
+        : m_max_interval_ms(_max_interval_ms)
+        , m_id(_id)
         , m_state(States::thinks)
         , m_p_left_fork(_p_left)
         , m_p_right_fork(_p_right)
@@ -100,7 +101,7 @@ private:
 #ifdef DEATH
         using namespace std::chrono;
         milliseconds const time_span = duration_cast<milliseconds>(steady_clock::now() - this->m_last_eating);
-        if (milliseconds(10 * max_interval_ms) < time_span) {
+        if (milliseconds(m_death_threshold * m_max_interval_ms) < time_span) {
             state(States::dead);
             for (;;) {
                 std::this_thread::sleep_for(seconds(60));
@@ -120,8 +121,8 @@ private:
         m_last_eating = steady_clock::now();
 #endif
     }
-    static std::chrono::milliseconds
-        random_interval()
+    std::chrono::milliseconds
+        random_interval()const
     {
         /// @brief mutex protected random generator
         class Random_generator
@@ -143,7 +144,7 @@ private:
             std::mutex m_mutex;
         };
         static Random_generator g_rnd;
-        static std::uniform_int_distribution<unsigned> distribution(1, max_interval_ms);
+        static std::uniform_int_distribution<unsigned> distribution(1, m_max_interval_ms);
         return std::chrono::milliseconds(distribution(g_rnd));
     }
     inline void
@@ -159,8 +160,10 @@ private:
 
 #ifdef DEATH
     steady_clock::time_point m_last_eating;
+    static unsigned const m_death_threshold = 4;
 #endif
 
+    unsigned const m_max_interval_ms;
     static std::condition_variable m_free_fork_event;
 };
 
@@ -225,7 +228,7 @@ class Canteen
 {
 public:
     explicit
-        Canteen(Monitor& _monitor, unsigned _number_of_philosophers = 5)
+        Canteen(Monitor& _monitor, unsigned _number_of_philosophers, unsigned _max_interval_ms)
         : m_p_monitor(&_monitor)
     {
         if (_number_of_philosophers < 2) {
@@ -241,7 +244,8 @@ public:
                 i,
                 forks[i],
                 forks[(i + 1) % _number_of_philosophers],
-                m_p_monitor));
+                m_p_monitor,
+                _max_interval_ms));
         }
     }
     void
@@ -344,9 +348,10 @@ main(int argc, char* argv[])
 {
     try {
         unsigned const num_ph = argc < 2 ? 64 : atoi(argv[1]);
+        unsigned const time_range = argc < 3 ? 10000 : std::max(2, atoi(argv[2]));
         using namespace philosophers;
         Waterfall_monitor wf_monitor;
-        Canteen canteen(wf_monitor, num_ph);
+        Canteen canteen(wf_monitor, num_ph, time_range);
         canteen();
         return 0;
     } catch (std::exception const& exc) {
