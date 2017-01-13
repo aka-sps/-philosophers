@@ -11,49 +11,35 @@
 
 namespace philosophers {
 
-/// @brief mutex protected random generator
-class Random_generator
-    : public std::default_random_engine
-{
-    typedef std::default_random_engine Base_class;
-
-public:
-    Random_generator()
-        : std::default_random_engine(result_type(std::chrono::system_clock::now().time_since_epoch().count()))
-    {}
-    result_type
-        operator()()
-    {
-        std::lock_guard<decltype(m_mutex)> guard(m_mutex);
-        return Base_class::operator()();
-    }
-
-private:
-    std::mutex m_mutex;
-};
-
-Random_generator g_rnd;
-
 /// Fork is simple mutex
 typedef std::mutex Fork;
+using std::chrono::steady_clock;
 
 class Monitor;
-
 class Philosopher
 {
 public:
+    static unsigned const max_interval_ms = 10000;
     enum class States
     {
         thinks,
         hungry,
-        dines
+        dines,
+#ifdef DEATH
+        dead
+#endif
     };
+
     Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen = nullptr)
         : m_id(_id)
-        , m_p_left(_p_left)
-        , m_p_right(_p_right)
         , m_state(States::thinks)
+        , m_p_left_fork(_p_left)
+        , m_p_right_fork(_p_right)
         , m_p_monitor(_p_canteen)
+        , m_event_wait_lock(this->m_event_mutex)
+#ifdef DEATH
+        , m_last_eating(steady_clock::now())
+#endif
     {}
 
     unsigned
@@ -66,7 +52,7 @@ public:
     {
         for (;;) {
             try {
-                thinks();
+                thinking();
                 aquire_forks();
                 eating();
             } catch (...) {
@@ -90,7 +76,7 @@ public:
 
 private:
     void
-        thinks()
+        thinking()
     {
         state(States::thinks);
         std::this_thread::sleep_for(random_interval());
@@ -100,42 +86,85 @@ private:
         aquire_forks()
     {
         state(States::hungry);
-        std::unique_lock<decltype(m_mutex)> locker(m_mutex);
-        while (-1 != std::try_lock(*m_p_left, *m_p_right)) {
-            m_cv.wait(locker);
+        for (;; m_free_fork_event.wait(m_event_wait_lock)) {
+            int const index = std::try_lock(*m_p_left_fork, *m_p_right_fork);
+            if (-1 == index) {
+                return;
+            }
+            check_for_death();
         }
     }
-
+    void
+        check_for_death()
+    {
+#ifdef DEATH
+        using namespace std::chrono;
+        milliseconds const time_span = duration_cast<milliseconds>(steady_clock::now() - this->m_last_eating);
+        if (milliseconds(10 * max_interval_ms) < time_span) {
+            state(States::dead);
+            for (;;) {
+                std::this_thread::sleep_for(seconds(60));
+            }
+        }
+#endif            
+    }
     void
         eating()
     {
         state(States::dines);
         std::this_thread::sleep_for(random_interval());
-        m_p_left->unlock();
-        m_p_right->unlock();
+        m_p_left_fork->unlock();
+        m_p_right_fork->unlock();
+        m_free_fork_event.notify_all();
+#ifdef DEATH
+        m_last_eating = steady_clock::now();
+#endif
     }
     static std::chrono::milliseconds
         random_interval()
     {
-        static std::uniform_int_distribution<unsigned> distrigution(1, 10000);
-        auto const rnd = distrigution(g_rnd);
-        return std::chrono::milliseconds(rnd);
+        /// @brief mutex protected random generator
+        class Random_generator
+            : public std::default_random_engine
+        {
+            typedef std::default_random_engine Base_class;
+        public:
+            Random_generator()
+                : Base_class(result_type(std::chrono::system_clock::now().time_since_epoch().count()))
+            {}
+            result_type
+                operator()()
+            {
+                std::lock_guard<decltype(m_mutex)> guard(m_mutex);
+                return Base_class::operator()();
+            }
+
+        private:
+            std::mutex m_mutex;
+        };
+        static Random_generator g_rnd;
+        static std::uniform_int_distribution<unsigned> distribution(1, max_interval_ms);
+        return std::chrono::milliseconds(distribution(g_rnd));
     }
     inline void
         state(States _state);
 
     unsigned m_id;
-    std::shared_ptr<Fork> m_p_left;
-    std::shared_ptr<Fork> m_p_right;
     States m_state;
+    std::shared_ptr<Fork> m_p_left_fork;
+    std::shared_ptr<Fork> m_p_right_fork;
     Monitor* m_p_monitor;
+    std::mutex m_event_mutex;
+    std::unique_lock<decltype(m_event_mutex)> m_event_wait_lock;
 
-    static std::mutex m_mutex;
-    static std::condition_variable m_cv;
+#ifdef DEATH
+    steady_clock::time_point m_last_eating;
+#endif
+
+    static std::condition_variable m_free_fork_event;
 };
 
-std::mutex Philosopher::m_mutex;
-std::condition_variable Philosopher::m_cv;
+std::condition_variable Philosopher::m_free_fork_event;
 
 class Monitor
 {
@@ -144,26 +173,32 @@ public:
     void
         log_state(Philosopher const* _p_philosopher)
     {
-        if (_p_philosopher) {
-            std::unique_lock<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
-            m_log_queue.emplace_back(_p_philosopher->id(), _p_philosopher->state());
-            m_cv.notify_one();
+        if (!_p_philosopher) {
+            return;
         }
+        {
+            std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
+            m_log_queue.emplace_back(_p_philosopher->id(), _p_philosopher->state());
+        }
+        m_state_logged_event.notify_one();
     }
     void
         monitor_worker()
     {
+        std::mutex event_mutex;
+        std::unique_lock<decltype(event_mutex)> locker(event_mutex);
         decltype(m_log_queue) work_log;
         for (;;) {
-            {
-                std::unique_lock<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
-                while (m_log_queue.empty()) {
-                    m_cv.wait(locker);
+            if (!m_log_queue.empty()) {
+                {
+                    std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
+                    std::swap(work_log, m_log_queue);
                 }
-                std::swap(work_log, m_log_queue);
+                events_logger(work_log);
+                work_log.clear();
+            } else {
+                m_state_logged_event.wait(locker);
             }
-            events_logger(work_log);
-            work_log.clear();
         }
     }
 
@@ -173,19 +208,17 @@ protected:
         events_logger(log_queue_type const& work_log) = 0;
 
     std::mutex m_log_queue_mutex;
-    std::condition_variable m_cv;
+    std::condition_variable m_state_logged_event;
     log_queue_type m_log_queue;
 };
 
 void
 Philosopher::state(States _state)
 {
-    std::unique_lock<decltype(m_mutex)> locker(m_mutex);
     m_state = _state;
     if (m_p_monitor) {
         m_p_monitor->log_state(this);
     }
-    m_cv.notify_all();
 }
 
 class Canteen
@@ -245,6 +278,11 @@ protected:
             case Philosopher::States::dines:
                 std::cout << "dines";
                 break;
+#ifdef DEATH
+            case Philosopher::States::dead:
+                std::cout << "die";
+                break;
+#endif
             default:
                 std::cout << "?????";
                 break;
@@ -273,7 +311,8 @@ protected:
     }
 
 private:
-    static char symb(Philosopher::States _state)
+    static char
+        symb(Philosopher::States _state)
     {
         switch (_state) {
         case Philosopher::States::thinks:
@@ -285,6 +324,11 @@ private:
         case Philosopher::States::dines:
             return '|';
             break;
+#ifdef DEATH
+        case Philosopher::States::dead:
+            return '#';
+            break;
+#endif
         default:
             return '?';
             break;
