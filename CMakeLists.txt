@@ -7,6 +7,7 @@ find_package(Threads)
 add_executable(philosophers
 	${CMAKE_CURRENT_SOURCE_DIR}/philosophers.cpp
 )
+set_property(TARGET philosophers PROPERTY CXX_STANDARD 11)
 
 target_compile_features(philosophers
 	PUBLIC
