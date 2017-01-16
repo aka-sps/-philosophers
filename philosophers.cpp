@@ -55,13 +55,15 @@ public:
         operator()()
     {
         m_thread_id = std::this_thread::get_id();
+        dump(std::cerr, *this);
         for (;;) {
             try {
                 thinking();
                 aquire_forks();
                 eating();
             } catch (...) {
-                /// ignored
+                dump(std::cerr << "Catch unhandled exception" << std::endl, *this);
+                break;
             }
         }
     }
@@ -315,9 +317,6 @@ public:
         threads.reserve(m_philosophers.size());
         std::transform(m_philosophers.cbegin(), m_philosophers.cend(), std::back_inserter(threads),
                        [](std::shared_ptr<Philosopher> const& ptr) {return std::thread(Philosopher::worker, ptr); });
-        for (auto p_ph : m_philosophers) {
-            dump(std::cerr, *p_ph);
-        }
         m_p_monitor->monitor_worker();
         std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
         for (auto p_ph : m_philosophers) {
