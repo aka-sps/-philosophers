@@ -8,6 +8,7 @@
 #include <thread>
 #include <iterator>
 #include <string>
+#include <cstdint>
 
 #undef DEATH
 namespace philosophers {
@@ -17,6 +18,9 @@ typedef std::mutex Fork;
 using std::chrono::steady_clock;
 
 class Monitor;
+class Philosopher;
+std::ostream&
+dump(std::ostream&, std::thread const&, Philosopher const&);
 class Philosopher
 {
 public:
@@ -166,12 +170,53 @@ private:
 
 public:
     static unsigned m_max_interval_ms;
+    friend std::ostream&
+        dump(std::ostream&, std::thread const&, Philosopher const&);
 };
 
 unsigned Philosopher::m_max_interval_ms = 10000;
 std::condition_variable Philosopher::m_free_fork_event;
 
+std::ostream&
+dump(std::ostream& str, uint32_t const* const p_begin, uint32_t const* const p_end)
+{
+    std::for_each(p_begin, p_end, [&str](uint32_t const val) {str << std::setw(8) << std::setfill('0') << std::hex << val << ' '; });
+    str << std::setw(0) << std::setfill(' ') << std::dec;
+    return str;
+}
 
+
+std::ostream&
+dump(std::ostream& str, std::thread const& thr, Philosopher const& ph)
+{
+    str << "Fork #" << ph.id() << " @" << &*ph.m_p_left_fork << ": ";
+    dump(str, reinterpret_cast<uint32_t const*>(&*ph.m_p_left_fork), reinterpret_cast<uint32_t const*>(&*ph.m_p_left_fork + 1));
+    str << std::endl;
+    str << "Thread id=" << std::hex << thr.get_id() << std::dec
+        << " philosopher id=" << ph.id() << " state=";
+    switch (ph.state()) {
+    case Philosopher::States::thinks:
+        std::cout << "thinks";
+        break;
+    case Philosopher::States::hungry:
+        std::cout << "hungry";
+        break;
+    case Philosopher::States::dines:
+        std::cout << "dines";
+        break;
+#ifdef DEATH
+    case Philosopher::States::dead:
+        std::cout << "die";
+        break;
+#endif
+    default:
+        std::cout << "?????";
+        break;
+    }
+    std::cout << std::endl;
+
+    return str;
+}
 class Monitor
 {
 public:
@@ -263,10 +308,14 @@ public:
         std::transform(m_philosophers.cbegin(), m_philosophers.cend(), std::back_inserter(threads),
                        [](std::shared_ptr<Philosopher> const& ptr) {return std::thread(Philosopher::worker, ptr); });
         m_p_monitor->monitor_worker();
-        for (unsigned i = 10; i--;) {
-            std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+        auto p_th = threads.cbegin();
+        auto p_ph = m_philosophers.cbegin();
+        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
+        for (; p_th != threads.cend(); ++p_th, ++p_ph) {
+            dump(std::cerr, *p_th, **p_ph);
         }
+        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
+        exit(-1);
     }
 
 private:
