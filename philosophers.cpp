@@ -30,9 +30,8 @@ public:
 #endif
     };
 
-    Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen, unsigned _max_interval_ms)
-        : m_max_interval_ms(_max_interval_ms)
-        , m_id(_id)
+    Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen)
+        : m_id(_id)
         , m_state(States::thinks)
         , m_p_left_fork(_p_left)
         , m_p_right_fork(_p_right)
@@ -163,11 +162,15 @@ private:
     static unsigned const m_death_threshold = 4;
 #endif
 
-    unsigned const m_max_interval_ms;
     static std::condition_variable m_free_fork_event;
+
+public:
+    static unsigned m_max_interval_ms;
 };
 
+unsigned Philosopher::m_max_interval_ms = 10000;
 std::condition_variable Philosopher::m_free_fork_event;
+
 
 class Monitor
 {
@@ -186,7 +189,7 @@ public:
         m_state_logged_event.notify_one();
     }
     void
-        monitor_worker(unsigned _max_interval_ms)
+        monitor_worker()
     {
         std::mutex event_mutex;
         std::unique_lock<decltype(event_mutex)> locker(event_mutex);
@@ -199,7 +202,7 @@ public:
                 }
                 events_logger(work_log);
                 work_log.clear();
-            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(_max_interval_ms))) {
+            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(Philosopher::m_max_interval_ms))) {
                 break;
             }
         }
@@ -233,9 +236,8 @@ class Canteen
 {
 public:
     explicit
-        Canteen(Monitor& _monitor, unsigned _number_of_philosophers, unsigned _max_interval_ms)
+        Canteen(Monitor& _monitor, unsigned _number_of_philosophers)
         : m_p_monitor(&_monitor)
-        , m_max_interval_ms(_max_interval_ms)
     {
         if (_number_of_philosophers < 2) {
             throw std::invalid_argument("Invalid number of philosophers (<2)");
@@ -250,8 +252,7 @@ public:
                 i,
                 forks[i],
                 forks[(i + 1) % _number_of_philosophers],
-                m_p_monitor,
-                m_max_interval_ms));
+                m_p_monitor));
         }
     }
     void
@@ -261,7 +262,7 @@ public:
         threads.reserve(m_philosophers.size());
         std::transform(m_philosophers.cbegin(), m_philosophers.cend(), std::back_inserter(threads),
                        [](std::shared_ptr<Philosopher> const& ptr) {return std::thread(Philosopher::worker, ptr); });
-        m_p_monitor->monitor_worker(m_max_interval_ms);
+        m_p_monitor->monitor_worker();
         for (unsigned i = 10; i--;) {
             std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -270,7 +271,6 @@ public:
 
 private:
     std::vector<std::shared_ptr<Philosopher> > m_philosophers;
-    unsigned const m_max_interval_ms;
     Monitor *const m_p_monitor;
 };
 
@@ -358,11 +358,11 @@ int
 main(int argc, char* argv[])
 {
     try {
-        unsigned const num_ph = argc < 2 ? 64 : atoi(argv[1]);
-        unsigned const time_range = argc < 3 ? 10000 : std::max(2, atoi(argv[2]));
         using namespace philosophers;
+        unsigned const num_ph = argc < 2 ? 64 : atoi(argv[1]);
+        Philosopher::m_max_interval_ms = argc < 3 ? 10000 : std::max(2, atoi(argv[2]));
         Waterfall_monitor wf_monitor;
-        Canteen canteen(wf_monitor, num_ph, time_range);
+        Canteen canteen(wf_monitor, num_ph);
         canteen();
         return 0;
     } catch (std::exception const& exc) {
