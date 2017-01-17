@@ -257,7 +257,7 @@ public:
         m_state_logged_event.notify_one();
     }
     void
-        monitor_worker()
+        monitor_worker(size_t _num_philosophers)
     {
         std::mutex event_mutex;
         std::unique_lock<decltype(event_mutex)> locker(event_mutex);
@@ -270,7 +270,7 @@ public:
                 }
                 events_logger(work_log);
                 work_log.clear();
-            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(Philosopher::m_max_interval_ms))) {
+            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(_num_philosophers * Philosopher::m_max_interval_ms))) {
                 break;
             }
         }
@@ -342,7 +342,7 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(200 * 100 + 5000));
 #endif
         full_dump();
-        m_p_monitor->monitor_worker();
+        m_p_monitor->monitor_worker(m_philosophers.size());
         full_dump();
         exit(-1);
     }
