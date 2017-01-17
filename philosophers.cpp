@@ -54,19 +54,20 @@ public:
     void
         operator()()
     {
-        m_thread_id = std::this_thread::get_id();
-        std::this_thread::sleep_for(std::chrono::milliseconds(id() * 100));
-        dump(std::cerr, *this);
-        std::this_thread::sleep_for(std::chrono::milliseconds((200 - id()) * 100 + 5000));
-        for (;;) {
-            try {
+        try {
+            m_thread_id = std::this_thread::get_id();
+#if 0
+            std::this_thread::sleep_for(std::chrono::milliseconds(id() * 100));
+            dump(std::cerr, *this);
+            std::this_thread::sleep_for(std::chrono::milliseconds((200 - id()) * 100 + 5000));
+#endif
+            for (;;) {
                 thinking();
                 aquire_forks();
                 eating();
-            } catch (...) {
-                dump(std::cerr << "Catch unhandled exception" << std::endl, *this);
-                break;
             }
+        } catch (...) {
+            std::cerr << "Catch unhandled exception in philosopher id=" << id() << std::endl;
         }
     }
 
@@ -166,8 +167,11 @@ private:
 
     unsigned m_id;
     States m_state;
+public:
     std::shared_ptr<Fork> m_p_left_fork;
     std::shared_ptr<Fork> m_p_right_fork;
+
+private:
     Monitor* m_p_monitor;
     std::mutex m_event_mutex;
     std::unique_lock<decltype(m_event_mutex)> m_event_wait_lock;
@@ -190,21 +194,28 @@ unsigned Philosopher::m_max_interval_ms = 10000;
 std::condition_variable Philosopher::m_free_fork_event;
 
 std::ostream&
+dump(std::ostream& str, uint8_t const* const p_begin, uint8_t const* const p_end)
+{
+    std::for_each(p_begin, p_end, [&str](uint8_t const val) {str << std::setw(2) << std::setfill('0') << std::hex << static_cast<unsigned>(val) << ' '; });
+    str << std::setw(0) << std::setfill(' ') << std::dec;
+    return str;
+}
+
+#if 0
+std::ostream&
 dump(std::ostream& str, uint32_t const* const p_begin, uint32_t const* const p_end)
 {
     std::for_each(p_begin, p_end, [&str](uint32_t const val) {str << std::setw(8) << std::setfill('0') << std::hex << val << ' '; });
     str << std::setw(0) << std::setfill(' ') << std::dec;
     return str;
 }
-
+#endif
 
 std::ostream&
 dump(std::ostream& str, Philosopher const& ph)
 {
-    str << "Fork #" << ph.id() << " @" << &*ph.m_p_left_fork << ": ";
-    dump(str, reinterpret_cast<uint32_t const*>(&*ph.m_p_left_fork), reinterpret_cast<uint32_t const*>(&*ph.m_p_left_fork + 1));
-    str << std::endl;
-    str << "Thread id=" << std::hex << ph.thread_id() << std::dec
+    str 
+        << "Thread id=" << std::hex << ph.thread_id() << std::dec
         << " philosopher id=" << ph.id() << " state=";
     switch (ph.state()) {
     case Philosopher::States::thinks:
@@ -302,6 +313,14 @@ public:
         std::vector<std::shared_ptr<Fork> > forks;
         forks.reserve(_number_of_philosophers);
         std::generate_n(std::back_inserter(forks), _number_of_philosophers, []() {return std::make_shared<Fork>(); });
+        {
+            unsigned id = 0;
+            std::for_each(forks.cbegin(), forks.cend(), [this,&id](std::shared_ptr<Fork> const& p_f) {
+                std::cerr << "Fork #" << id++ << " @" << &*p_f << ": ";
+                dump(std::cerr, reinterpret_cast<uint8_t const*>(&*p_f), reinterpret_cast<uint8_t const*>((&*p_f) + 1));
+                std::cerr << std::endl;
+            });
+        }
 
         m_philosophers.reserve(_number_of_philosophers);
         for (unsigned i = 0; i < _number_of_philosophers; ++i) {
@@ -319,17 +338,29 @@ public:
         threads.reserve(m_philosophers.size());
         std::transform(m_philosophers.cbegin(), m_philosophers.cend(), std::back_inserter(threads),
                        [](std::shared_ptr<Philosopher> const& ptr) {return std::thread(Philosopher::worker, ptr); });
+#if 0
         std::this_thread::sleep_for(std::chrono::milliseconds(200 * 100 + 5000));
+#endif
+        full_dump();
         m_p_monitor->monitor_worker();
-        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
-        for (auto p_ph : m_philosophers) {
-            dump(std::cerr, *p_ph);
-        }
-        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
+        full_dump();
         exit(-1);
     }
 
 private:
+    void
+        full_dump()
+    {
+        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
+        for (auto const& p_ph : m_philosophers) {
+            std::cerr << "Fork #" << p_ph->id() << " @" << &*p_ph->m_p_left_fork << ": ";
+            dump(std::cerr, reinterpret_cast<uint8_t const*>(&*p_ph->m_p_left_fork), reinterpret_cast<uint8_t const*>((&*p_ph->m_p_left_fork) + 1));
+            std::cerr << std::endl;
+            dump(std::cerr, *p_ph);
+        }
+        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
+    }
+
     std::vector<std::shared_ptr<Philosopher> > m_philosophers;
     Monitor *const m_p_monitor;
 };
