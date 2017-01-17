@@ -274,6 +274,9 @@ public:
                 break;
             }
         }
+        std::cerr << "m_log_queue_mutex: ";
+        dump(std::cerr, reinterpret_cast<uint8_t const*>(&m_log_queue_mutex), reinterpret_cast<uint8_t const*>(&m_log_queue_mutex + 1));
+        std::cerr << std::endl;
     }
     size_t
         queue_size()const
