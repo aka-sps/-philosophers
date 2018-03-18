@@ -11,7 +11,7 @@ or
 `cmake -DCMAKE_TOOLCHAIN_FILE=<path_to_your_cmake_toolchain_file> <path_to_source_dir>`
 
 ## Build
-`cmake <path_to_build_dir>`
+`cmake --build <path_to_build_dir>`
 
 ## Run
 `<path_to_build_dir>/philosophers <number_of_philosophers> <max_interval_ms>`
