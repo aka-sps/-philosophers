@@ -9,7 +9,13 @@
 #include <iterator>
 #include <string>
 #include <cstdint>
+#include <atomic>
 
+#define DEATH
+
+namespace {
+unsigned g_max_interval_ms = 10000;
+}
 namespace philosophers {
 
 class Fork
@@ -32,16 +38,25 @@ public:
         return false;
     }
 
-    void
+    bool
         wait_until_available()
     {
         std::unique_lock<std::mutex> lock(m_mutex);
 
-        while (!this->m_is_available) {
-            this->m_conditional_variable.wait(lock);
+        if (this->m_is_available) {
+            this->m_is_available = false;
+            return true;
         }
 
-        this->m_is_available = false;
+        using namespace std::chrono;
+        this->m_conditional_variable.wait_for(lock, milliseconds(g_max_interval_ms));
+
+        if (this->m_is_available) {
+            this->m_is_available = false;
+            return true;
+        }
+
+        return false;
     }
 
     void
@@ -53,7 +68,7 @@ public:
     }
 
 private:
-    bool m_is_available;
+    std::atomic<bool> m_is_available;
     std::mutex m_mutex;
     std::condition_variable m_conditional_variable;
 };
@@ -70,6 +85,9 @@ public:
         thinks,
         hungry,
         dines,
+#ifdef DEATH
+        dead
+#endif
     };
 
     Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen)
@@ -78,6 +96,9 @@ public:
         , m_p_left_fork(_p_left)
         , m_p_right_fork(_p_right)
         , m_p_monitor(_p_canteen)
+#ifdef DEATH
+        , m_last_eating(steady_clock::now())
+#endif
     {}
 
     unsigned
@@ -133,7 +154,9 @@ private:
         aquire_forks()
     {
         state(States::hungry);
-        this->m_p_left_fork->wait_until_available();
+        while (!this->m_p_left_fork->wait_until_available()) {
+            check_for_death();
+        }
 
         for (;;) {
             if (this->m_p_right_fork->try_to_get()) {
@@ -142,14 +165,41 @@ private:
 
             this->m_p_left_fork->free();
 
-            this->m_p_right_fork->wait_until_available();
+            while (!this->m_p_right_fork->wait_until_available()) {
+                check_for_death();
+            }
 
             if (this->m_p_left_fork->try_to_get()) {
                 break;
             }
 
-            this->m_p_left_fork->wait_until_available();
+            while (!this->m_p_left_fork->wait_until_available()) {
+                check_for_death();
+            }
         }
+    }
+
+    void
+        check_for_death()
+    {
+#ifdef DEATH
+#if 0
+        this->m_p_left_fork->free();
+        this->m_p_right_fork->free();
+#endif
+        using namespace std::chrono;
+        milliseconds const time_span = duration_cast<milliseconds>(steady_clock::now() - this->m_last_eating);
+        if (milliseconds(m_death_threshold * g_max_interval_ms) < time_span) {
+            state(States::dead);
+            for (;;) {
+#if 0
+                this->m_p_left_fork->free();
+                this->m_p_right_fork->free();
+#endif
+                std::this_thread::sleep_for(seconds(60));
+            }
+        }
+#endif            
     }
 
     void
@@ -159,6 +209,9 @@ private:
         std::this_thread::sleep_for(random_interval());
         this->m_p_left_fork->free();
         this->m_p_right_fork->free();
+#ifdef DEATH
+        m_last_eating = steady_clock::now();
+#endif
     }
 
     std::chrono::milliseconds
@@ -184,7 +237,7 @@ private:
             std::mutex m_mutex;
         };
         static Random_generator g_rnd;
-        static std::uniform_int_distribution<unsigned> distribution(1, m_max_interval_ms);
+        static std::uniform_int_distribution<unsigned> distribution(1, g_max_interval_ms);
         return std::chrono::milliseconds(distribution(g_rnd));
     }
     inline void
@@ -200,11 +253,11 @@ private:
     Monitor* m_p_monitor;
     std::thread::id m_thread_id;
 
-public:
-    static unsigned m_max_interval_ms;
+#ifdef DEATH
+    steady_clock::time_point m_last_eating;
+    static unsigned const m_death_threshold = 4;
+#endif
 };
-
-unsigned Philosopher::m_max_interval_ms = 10000;
 
 class Monitor
 {
@@ -241,7 +294,7 @@ public:
                 }
                 events_logger(work_log);
                 work_log.clear();
-            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(10 * Philosopher::m_max_interval_ms))) {
+            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(10 * g_max_interval_ms))) {
                 throw std::runtime_error("No events for a long time");
             }
         }
@@ -290,8 +343,6 @@ public:
         std::generate_n(std::back_inserter(forks), _number_of_philosophers, []() {
             return std::make_shared<Fork>();
         });
-        m_philosophers.reserve(_number_of_philosophers);
-
         m_philosophers.reserve(_number_of_philosophers);
 
         for (unsigned i = 0; i < _number_of_philosophers; ++i) {
@@ -351,6 +402,12 @@ protected:
                 std::cout << "dines";
                 break;
 
+#ifdef DEATH
+            case Philosopher::States::dead:
+                std::cout << "die";
+                break;
+#endif
+
             default:
                 std::cout << "?????";
                 break;
@@ -390,13 +447,18 @@ private:
             break;
 
         case Philosopher::States::hungry:
-            return '-';
+            return '.';
             break;
 
         case Philosopher::States::dines:
             return '|';
             break;
 
+#ifdef DEATH
+        case Philosopher::States::dead:
+            return '+';
+            break;
+#endif
         default:
             return '?';
             break;
@@ -413,7 +475,7 @@ main(int argc, char* argv[])
     try {
         using namespace philosophers;
         unsigned const num_ph = argc < 2 ? 64 : atoi(argv[1]);
-        Philosopher::m_max_interval_ms = argc < 3 ? 10000 : std::max(2, atoi(argv[2]));
+        g_max_interval_ms = argc < 3 ? 10000 : std::max(2, atoi(argv[2]));
         Waterfall_monitor wf_monitor;
         Canteen canteen(wf_monitor, num_ph);
         canteen();
