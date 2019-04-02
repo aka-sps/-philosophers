@@ -10,17 +10,58 @@
 #include <string>
 #include <cstdint>
 
-#undef DEATH
 namespace philosophers {
 
-/// Fork is simple mutex
-typedef std::mutex Fork;
+class Fork
+{
+public:
+    Fork()
+        : m_is_available(true)
+    {}
+
+    bool
+        try_to_get()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+
+        if (this->m_is_available) {
+            this->m_is_available = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    void
+        wait_until_available()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+
+        while (!this->m_is_available) {
+            this->m_conditional_variable.wait(lock);
+        }
+
+        this->m_is_available = false;
+    }
+
+    void
+        free()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        this->m_is_available = true;
+        this->m_conditional_variable.notify_one();
+    }
+
+private:
+    bool m_is_available;
+    std::mutex m_mutex;
+    std::condition_variable m_conditional_variable;
+};
+
 using std::chrono::steady_clock;
 
 class Monitor;
-class Philosopher;
-std::ostream&
-dump(std::ostream&, Philosopher const&);
+
 class Philosopher
 {
 public:
@@ -29,9 +70,6 @@ public:
         thinks,
         hungry,
         dines,
-#ifdef DEATH
-        dead
-#endif
     };
 
     Philosopher(unsigned _id, std::shared_ptr<Fork> const& _p_left, std::shared_ptr<Fork> const& _p_right, Monitor* _p_canteen)
@@ -40,10 +78,6 @@ public:
         , m_p_left_fork(_p_left)
         , m_p_right_fork(_p_right)
         , m_p_monitor(_p_canteen)
-        , m_event_wait_lock(this->m_event_mutex)
-#ifdef DEATH
-        , m_last_eating(steady_clock::now())
-#endif
     {}
 
     unsigned
@@ -51,16 +85,13 @@ public:
     {
         return m_id;
     }
+
     void
         operator()()
     {
         try {
             m_thread_id = std::this_thread::get_id();
-#if 0
-            std::this_thread::sleep_for(std::chrono::milliseconds(id() * 100));
-            dump(std::cerr, *this);
-            std::this_thread::sleep_for(std::chrono::milliseconds((200 - id()) * 100 + 5000));
-#endif
+
             for (;;) {
                 thinking();
                 aquire_forks();
@@ -102,40 +133,34 @@ private:
         aquire_forks()
     {
         state(States::hungry);
-        for (;; m_free_fork_event.wait(m_event_wait_lock)) {
-            int const index = std::try_lock(*m_p_left_fork, *m_p_right_fork);
-            if (-1 == index) {
-                return;
+        this->m_p_left_fork->wait_until_available();
+
+        for (;;) {
+            if (this->m_p_right_fork->try_to_get()) {
+                break;
             }
-            check_for_death();
+
+            this->m_p_left_fork->free();
+
+            this->m_p_right_fork->wait_until_available();
+
+            if (this->m_p_left_fork->try_to_get()) {
+                break;
+            }
+
+            this->m_p_left_fork->wait_until_available();
         }
     }
-    void
-        check_for_death()
-    {
-#ifdef DEATH
-        using namespace std::chrono;
-        milliseconds const time_span = duration_cast<milliseconds>(steady_clock::now() - this->m_last_eating);
-        if (milliseconds(m_death_threshold * m_max_interval_ms) < time_span) {
-            state(States::dead);
-            for (;;) {
-                std::this_thread::sleep_for(seconds(60));
-            }
-        }
-#endif            
-    }
+
     void
         eating()
     {
         state(States::dines);
         std::this_thread::sleep_for(random_interval());
-        m_p_left_fork->unlock();
-        m_p_right_fork->unlock();
-        m_free_fork_event.notify_all();
-#ifdef DEATH
-        m_last_eating = steady_clock::now();
-#endif
+        this->m_p_left_fork->free();
+        this->m_p_right_fork->free();
     }
+
     std::chrono::milliseconds
         random_interval()const
     {
@@ -173,95 +198,41 @@ public:
 
 private:
     Monitor* m_p_monitor;
-    std::mutex m_event_mutex;
-    std::unique_lock<decltype(m_event_mutex)> m_event_wait_lock;
     std::thread::id m_thread_id;
-
-#ifdef DEATH
-    steady_clock::time_point m_last_eating;
-    static unsigned const m_death_threshold = 4;
-#endif
-
-    static std::condition_variable m_free_fork_event;
 
 public:
     static unsigned m_max_interval_ms;
-    friend std::ostream&
-        dump(std::ostream&, Philosopher const&);
 };
 
 unsigned Philosopher::m_max_interval_ms = 10000;
-std::condition_variable Philosopher::m_free_fork_event;
 
-std::ostream&
-dump(std::ostream& str, uint8_t const* const p_begin, uint8_t const* const p_end)
-{
-    std::for_each(p_begin, p_end, [&str](uint8_t const val) {str << std::setw(2) << std::setfill('0') << std::hex << static_cast<unsigned>(val) << ' '; });
-    str << std::setw(0) << std::setfill(' ') << std::dec;
-    return str;
-}
-
-#if 0
-std::ostream&
-dump(std::ostream& str, uint32_t const* const p_begin, uint32_t const* const p_end)
-{
-    std::for_each(p_begin, p_end, [&str](uint32_t const val) {str << std::setw(8) << std::setfill('0') << std::hex << val << ' '; });
-    str << std::setw(0) << std::setfill(' ') << std::dec;
-    return str;
-}
-#endif
-
-std::ostream&
-dump(std::ostream& str, Philosopher const& ph)
-{
-    str 
-        << "Thread id=" << std::hex << ph.thread_id() << std::dec
-        << " philosopher id=" << ph.id() << " state=";
-    switch (ph.state()) {
-    case Philosopher::States::thinks:
-        std::cout << "thinks";
-        break;
-    case Philosopher::States::hungry:
-        std::cout << "hungry";
-        break;
-    case Philosopher::States::dines:
-        std::cout << "dines";
-        break;
-#ifdef DEATH
-    case Philosopher::States::dead:
-        std::cout << "die";
-        break;
-#endif
-    default:
-        std::cout << "?????";
-        break;
-    }
-    std::cout << std::endl;
-
-    return str;
-}
 class Monitor
 {
 public:
     typedef std::pair<unsigned, Philosopher::States> state_log_element_type;
+
     void
         log_state(Philosopher const* _p_philosopher)
     {
         if (!_p_philosopher) {
             return;
         }
+
         {
             std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
             m_log_queue.emplace_back(_p_philosopher->id(), _p_philosopher->state());
         }
+
         m_state_logged_event.notify_one();
     }
+
     void
         monitor_worker()
     {
         std::mutex event_mutex;
         std::unique_lock<decltype(event_mutex)> locker(event_mutex);
         decltype(m_log_queue) work_log;
+
         for (;;) {
             if (!m_log_queue.empty()) {
                 {
@@ -271,19 +242,18 @@ public:
                 events_logger(work_log);
                 work_log.clear();
             } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(10 * Philosopher::m_max_interval_ms))) {
-                break;
+                throw std::runtime_error("No events for a long time");
             }
         }
-        std::cerr << "m_log_queue_mutex: ";
-        dump(std::cerr, reinterpret_cast<uint8_t const*>(&m_log_queue_mutex), reinterpret_cast<uint8_t const*>(&m_log_queue_mutex + 1));
-        std::cerr << std::endl;
     }
+
     size_t
         queue_size()const
     {
         std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
         return m_log_queue.size();
     }
+
 protected:
     typedef std::vector<state_log_element_type> log_queue_type;
     virtual void
@@ -298,6 +268,7 @@ void
 Philosopher::state(States _state)
 {
     m_state = _state;
+
     if (m_p_monitor) {
         m_p_monitor->log_state(this);
     }
@@ -313,19 +284,16 @@ public:
         if (_number_of_philosophers < 2) {
             throw std::invalid_argument("Invalid number of philosophers (<2)");
         }
-        std::vector<std::shared_ptr<Fork> > forks;
+
+        std::vector<std::shared_ptr<Fork>> forks;
         forks.reserve(_number_of_philosophers);
-        std::generate_n(std::back_inserter(forks), _number_of_philosophers, []() {return std::make_shared<Fork>(); });
-        {
-            unsigned id = 0;
-            std::for_each(forks.cbegin(), forks.cend(), [this,&id](std::shared_ptr<Fork> const& p_f) {
-                std::cerr << "Fork #" << id++ << " @" << &*p_f << ": ";
-                dump(std::cerr, reinterpret_cast<uint8_t const*>(&*p_f), reinterpret_cast<uint8_t const*>((&*p_f) + 1));
-                std::cerr << std::endl;
-            });
-        }
+        std::generate_n(std::back_inserter(forks), _number_of_philosophers, []() {
+            return std::make_shared<Fork>();
+        });
+        m_philosophers.reserve(_number_of_philosophers);
 
         m_philosophers.reserve(_number_of_philosophers);
+
         for (unsigned i = 0; i < _number_of_philosophers; ++i) {
             m_philosophers.push_back(std::make_shared<Philosopher>(
                 i,
@@ -334,38 +302,30 @@ public:
                 m_p_monitor));
         }
     }
+
     void
         operator()()
     {
-        std::vector<std::thread> threads;
-        threads.reserve(m_philosophers.size());
-        std::transform(m_philosophers.cbegin(), m_philosophers.cend(), std::back_inserter(threads),
-                       [](std::shared_ptr<Philosopher> const& ptr) {return std::thread(Philosopher::worker, ptr); });
-#if 0
-        std::this_thread::sleep_for(std::chrono::milliseconds(200 * 100 + 5000));
-#endif
-        full_dump();
-        m_p_monitor->monitor_worker();
-        full_dump();
-        exit(-1);
+        try {
+            std::vector<std::thread> threads;
+            threads.reserve(m_philosophers.size());
+            auto const thread_creator = [](std::shared_ptr<Philosopher> const & ptr) {return std::thread(Philosopher::worker, ptr); };
+            std::transform(m_philosophers.cbegin(), m_philosophers.cend(),
+                           std::back_inserter(threads),
+                           thread_creator);
+            m_p_monitor->monitor_worker();
+        } catch (std::exception const& _excp) {
+            std::cerr << "Catch std::exception:" << _excp.what() << std::endl;
+        } catch (...) {
+            std::cerr << "Catch Unknown exception!" << std::endl;
+        }
+
+        throw std::logic_error("Unexpected exit");
     }
 
 private:
-    void
-        full_dump()
-    {
-        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
-        for (auto const& p_ph : m_philosophers) {
-            std::cerr << "Fork #" << p_ph->id() << " @" << &*p_ph->m_p_left_fork << ": ";
-            dump(std::cerr, reinterpret_cast<uint8_t const*>(&*p_ph->m_p_left_fork), reinterpret_cast<uint8_t const*>((&*p_ph->m_p_left_fork) + 1));
-            std::cerr << std::endl;
-            dump(std::cerr, *p_ph);
-        }
-        std::cerr << "queue_size = " << m_p_monitor->queue_size() << std::endl;
-    }
-
-    std::vector<std::shared_ptr<Philosopher> > m_philosophers;
-    Monitor *const m_p_monitor;
+    std::vector<std::shared_ptr<Philosopher>> m_philosophers;
+    Monitor* const m_p_monitor;
 };
 
 class Simple_log_monitor
@@ -375,27 +335,27 @@ protected:
     virtual void
         events_logger(log_queue_type const& work_log)
     {
-        auto const log_event = [](log_queue_type::value_type const& el) {
+        auto const log_event = [](log_queue_type::value_type const & el) {
             std::cout << "Philosopher #" << el.first << " ";
+
             switch (el.second) {
             case Philosopher::States::thinks:
                 std::cout << "thinks";
                 break;
+
             case Philosopher::States::hungry:
                 std::cout << "hungry";
                 break;
+
             case Philosopher::States::dines:
                 std::cout << "dines";
                 break;
-#ifdef DEATH
-            case Philosopher::States::dead:
-                std::cout << "die";
-                break;
-#endif
+
             default:
                 std::cout << "?????";
                 break;
             }
+
             std::cout << std::endl;
         };
         std::for_each(std::begin(work_log), std::end(work_log), log_event);
@@ -409,10 +369,11 @@ protected:
     virtual void
         events_logger(log_queue_type const& work_log)override
     {
-        auto const log_event = [this](log_queue_type::value_type const& el) {
+        auto const log_event = [this](log_queue_type::value_type const & el) {
             if (m_buffer.size() <= el.first) {
                 m_buffer.append(el.first + 1 - m_buffer.size(), symb(Philosopher::States::thinks));
             }
+
             m_buffer[el.first] = symb(el.second);
         };
         std::for_each(std::begin(work_log), std::end(work_log), log_event);
@@ -427,17 +388,15 @@ private:
         case Philosopher::States::thinks:
             return ' ';
             break;
+
         case Philosopher::States::hungry:
             return '-';
             break;
+
         case Philosopher::States::dines:
             return '|';
             break;
-#ifdef DEATH
-        case Philosopher::States::dead:
-            return '#';
-            break;
-#endif
+
         default:
             return '?';
             break;
@@ -464,5 +423,6 @@ main(int argc, char* argv[])
     } catch (...) {
         std::cerr << "Unhandled unknown exception" << std::endl;
     }
-    return 1;
+
+    return EXIT_FAILURE;
 }
