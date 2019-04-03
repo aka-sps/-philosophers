@@ -451,7 +451,7 @@ private:
 
 #ifdef PHILOSOPHERS_STARVATION
         case Philosopher::States::dead:
-            return '+';
+            return '#';
             break;
 #endif
         default:
