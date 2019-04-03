@@ -1,0 +1,54 @@
+= philosophers
+:doctype: manpage
+:encoding: utf-8
+:lang: en
+:toc: left
+:numbered:
+
+== Name
+
+philosophers - simple c++11 demo of "Dining philosophers problem".
+
+== Synopsis
+[source,sh]
+----
+<path_to_build_dir>/philosophers <number_of_philosophers> <max_interval_ms>
+----
+
+See link:++https://en.wikipedia.org/wiki/Dining_philosophers_problem++[Wikipedia].
+
+
+=== Command-line arguments
+
+- `max_interval_ms` number of philosophers/forks (default = 64)
+- `max_interval_ms` maximal interval eating/thinking state for philosophers in ms (default = 10000)
+
+=== Legend
+
+- ' ' - thinking
+- '.' - waiting for forks
+- '|' - eating
+- '#' - dead (if enabled)
+
+== Build
+=== CMake Configure
+In your build directory
+
+[source,sh]
+----
+cmake <path_to_source_dir>
+----
+
+or
+
+[source,sh]
+----
+cmake -DCMAKE_TOOLCHAIN_FILE=<path_to_your_cmake_toolchain_file> <path_to_source_dir>
+----
+
+=== CMake build
+[source,sh]
+----
+cmake --build <path_to_build_dir>
+----
+
