@@ -19,9 +19,16 @@ namespace philosophers {
 class Fork
 {
 public:
-    Fork()
-        : m_is_available(true)
+    Fork(unsigned _id)
+        : m_id(_id)
+        , m_is_available(true)
     {}
+
+    unsigned
+        id() const
+    {
+        return m_id;
+    }
 
     bool
         try_to_get()
@@ -66,7 +73,8 @@ public:
     }
 
 private:
-    std::atomic<bool> m_is_available;
+    unsigned m_id;
+    bool volatile m_is_available;
     std::mutex m_mutex;
     std::condition_variable m_conditional_variable;
 };
@@ -263,11 +271,11 @@ public:
         }
 
         {
-            std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
+            std::lock_guard<decltype(this->m_log_queue_mutex)> locker(this->m_log_queue_mutex);
             m_log_queue.emplace_back(_p_philosopher->id(), _p_philosopher->state());
         }
 
-        m_state_logged_event.notify_one();
+        this->m_state_logged_event.notify_one();
     }
 
     void
@@ -280,22 +288,15 @@ public:
         for (;;) {
             if (!m_log_queue.empty()) {
                 {
-                    std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
+                    std::lock_guard<decltype(this->m_log_queue_mutex)> locker(this->m_log_queue_mutex);
                     std::swap(work_log, m_log_queue);
                 }
                 events_logger(work_log);
                 work_log.clear();
-            } else if (std::cv_status::timeout == m_state_logged_event.wait_for(locker, std::chrono::milliseconds(10 * g_max_interval_ms))) {
+            } else if (std::cv_status::timeout == this->m_state_logged_event.wait_for(locker, std::chrono::milliseconds(10 * g_max_interval_ms))) {
                 throw std::runtime_error("No events for a long time");
             }
         }
-    }
-
-    size_t
-        queue_size()const
-    {
-        std::lock_guard<decltype(m_log_queue_mutex)> locker(m_log_queue_mutex);
-        return m_log_queue.size();
     }
 
 protected:
@@ -311,10 +312,10 @@ protected:
 void
 Philosopher::state(States _state)
 {
-    m_state = _state;
+    this->m_state = _state;
 
-    if (m_p_monitor) {
-        m_p_monitor->log_state(this);
+    if (this->m_p_monitor) {
+        this->m_p_monitor->log_state(this);
     }
 }
 
@@ -331,17 +332,19 @@ public:
 
         std::vector<std::shared_ptr<Fork>> forks;
         forks.reserve(_number_of_philosophers);
-        std::generate_n(std::back_inserter(forks), _number_of_philosophers, []() {
-            return std::make_shared<Fork>();
-        });
-        m_philosophers.reserve(_number_of_philosophers);
 
         for (unsigned i = 0; i < _number_of_philosophers; ++i) {
-            m_philosophers.push_back(std::make_shared<Philosopher>(
+            forks.push_back(std::make_shared<Fork>(i));
+        }
+
+        this->m_philosophers.reserve(_number_of_philosophers);
+
+        for (unsigned i = 0; i < _number_of_philosophers; ++i) {
+            this->m_philosophers.push_back(std::make_shared<Philosopher>(
                 i,
                 forks[i],
                 forks[(i + 1) % _number_of_philosophers],
-                m_p_monitor));
+                this->m_p_monitor));
         }
     }
 
@@ -350,12 +353,12 @@ public:
     {
         try {
             std::vector<std::thread> threads;
-            threads.reserve(m_philosophers.size());
+            threads.reserve(this->m_philosophers.size());
             auto const thread_creator = [](std::shared_ptr<Philosopher> const & ptr) {return std::thread(Philosopher::worker, ptr); };
-            std::transform(m_philosophers.cbegin(), m_philosophers.cend(),
+            std::transform(this->m_philosophers.cbegin(), m_philosophers.cend(),
                            std::back_inserter(threads),
                            thread_creator);
-            m_p_monitor->monitor_worker();
+            this->m_p_monitor->monitor_worker();
         } catch (std::exception const& _excp) {
             std::cerr << "Catch std::exception:" << _excp.what() << std::endl;
         } catch (...) {
@@ -374,8 +377,8 @@ class Simple_log_monitor
     : public Monitor
 {
 protected:
-    virtual void
-        events_logger(log_queue_type const& work_log)
+    void
+        events_logger(log_queue_type const& work_log) override
     {
         auto const log_event = [](log_queue_type::value_type const & el) {
             std::cout << "Philosopher #" << el.first << " ";
@@ -406,6 +409,7 @@ protected:
 
             std::cout << std::endl;
         };
+
         std::for_each(std::begin(work_log), std::end(work_log), log_event);
     }
 };
@@ -414,18 +418,18 @@ class Waterfall_monitor
     : public Monitor
 {
 protected:
-    virtual void
+    void
         events_logger(log_queue_type const& work_log)override
     {
         auto const log_event = [this](log_queue_type::value_type const & el) {
-            if (m_buffer.size() <= el.first) {
-                m_buffer.append(el.first + 1 - m_buffer.size(), symb(Philosopher::States::thinks));
+            if (this->m_buffer.size() <= el.first) {
+                this->m_buffer.append(el.first + 1 - this->m_buffer.size(), symb(Philosopher::States::thinks));
             }
 
-            m_buffer[el.first] = symb(el.second);
+            this->m_buffer[el.first] = symb(el.second);
         };
         std::for_each(std::begin(work_log), std::end(work_log), log_event);
-        std::cout << m_buffer << std::endl;
+        std::cout << this->m_buffer << std::endl;
     }
 
 private:
@@ -455,6 +459,7 @@ private:
             break;
         }
     }
+
     std::string m_buffer;
 };
 
