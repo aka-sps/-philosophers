@@ -11,8 +11,6 @@
 #include <cstdint>
 #include <atomic>
 
-#define DEATH
-
 namespace {
 unsigned g_max_interval_ms = 10000;
 }
@@ -85,7 +83,7 @@ public:
         thinks,
         hungry,
         dines,
-#ifdef DEATH
+#ifdef PHILOSOPHERS_STARVATION
         dead
 #endif
     };
@@ -96,7 +94,7 @@ public:
         , m_p_left_fork(_p_left)
         , m_p_right_fork(_p_right)
         , m_p_monitor(_p_canteen)
-#ifdef DEATH
+#ifdef PHILOSOPHERS_STARVATION
         , m_last_eating(steady_clock::now())
 #endif
     {}
@@ -182,21 +180,13 @@ private:
     void
         check_for_death()
     {
-#ifdef DEATH
-#if 0
-        this->m_p_left_fork->free();
-        this->m_p_right_fork->free();
-#endif
+#ifdef PHILOSOPHERS_STARVATION
         using namespace std::chrono;
         milliseconds const time_span = duration_cast<milliseconds>(steady_clock::now() - this->m_last_eating);
         if (milliseconds(m_death_threshold * g_max_interval_ms) < time_span) {
             state(States::dead);
             for (;;) {
-#if 0
-                this->m_p_left_fork->free();
-                this->m_p_right_fork->free();
-#endif
-                std::this_thread::sleep_for(seconds(60));
+                std::this_thread::sleep_for(milliseconds(g_max_interval_ms));
             }
         }
 #endif            
@@ -207,10 +197,10 @@ private:
     {
         state(States::dines);
         std::this_thread::sleep_for(random_interval());
-        this->m_p_left_fork->free();
         this->m_p_right_fork->free();
-#ifdef DEATH
-        m_last_eating = steady_clock::now();
+        this->m_p_left_fork->free();
+#ifdef PHILOSOPHERS_STARVATION
+        this->m_last_eating = steady_clock::now();
 #endif
     }
 
@@ -240,11 +230,13 @@ private:
         static std::uniform_int_distribution<unsigned> distribution(1, g_max_interval_ms);
         return std::chrono::milliseconds(distribution(g_rnd));
     }
+
     inline void
         state(States _state);
 
     unsigned m_id;
     States m_state;
+
 public:
     std::shared_ptr<Fork> m_p_left_fork;
     std::shared_ptr<Fork> m_p_right_fork;
@@ -253,7 +245,7 @@ private:
     Monitor* m_p_monitor;
     std::thread::id m_thread_id;
 
-#ifdef DEATH
+#ifdef PHILOSOPHERS_STARVATION
     steady_clock::time_point m_last_eating;
     static unsigned const m_death_threshold = 4;
 #endif
@@ -402,7 +394,7 @@ protected:
                 std::cout << "dines";
                 break;
 
-#ifdef DEATH
+#ifdef PHILOSOPHERS_STARVATION
             case Philosopher::States::dead:
                 std::cout << "die";
                 break;
@@ -454,7 +446,7 @@ private:
             return '|';
             break;
 
-#ifdef DEATH
+#ifdef PHILOSOPHERS_STARVATION
         case Philosopher::States::dead:
             return '+';
             break;
@@ -473,8 +465,9 @@ int
 main(int argc, char* argv[])
 {
     try {
+        std::cout << "Dining philosophers problem " << GIT_DESCRIBE << std::endl;
         using namespace philosophers;
-        unsigned const num_ph = argc < 2 ? 64 : atoi(argv[1]);
+        unsigned const num_ph = argc < 2 ? 64 : std::max(2, atoi(argv[1]));
         g_max_interval_ms = argc < 3 ? 10000 : std::max(2, atoi(argv[2]));
         Waterfall_monitor wf_monitor;
         Canteen canteen(wf_monitor, num_ph);
