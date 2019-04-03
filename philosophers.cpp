@@ -152,11 +152,12 @@ private:
         aquire_forks()
     {
         state(States::hungry);
-        while (!this->m_p_left_fork->wait_until_available()) {
-            check_for_death();
-        }
 
         for (;;) {
+            while (!this->m_p_left_fork->wait_until_available()) {
+                check_for_death();
+            }
+
             if (this->m_p_right_fork->try_to_get()) {
                 break;
             }
@@ -171,9 +172,7 @@ private:
                 break;
             }
 
-            while (!this->m_p_left_fork->wait_until_available()) {
-                check_for_death();
-            }
+            this->m_p_right_fork->free();
         }
     }
 
