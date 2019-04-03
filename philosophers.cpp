@@ -85,6 +85,17 @@ class Monitor;
 
 class Philosopher
 {
+    class Death
+        : public std::runtime_error
+    {
+        typedef std::runtime_error Base_class;
+
+    public:
+        Death()
+            : Base_class("Philosopher died")
+        {}
+    };
+
 public:
     enum class States
     {
@@ -101,11 +112,18 @@ public:
         , m_state(States::thinks)
         , m_p_left_fork(_p_left)
         , m_p_right_fork(_p_right)
+        , m_kill_request(false)
         , m_p_monitor(_p_canteen)
 #ifdef PHILOSOPHERS_STARVATION
         , m_last_eating(steady_clock::now())
 #endif
     {}
+
+    void
+        kill()
+    {
+        this->m_kill_request = true;
+    }
 
     unsigned
         id()const
@@ -117,13 +135,14 @@ public:
         operator()()
     {
         try {
-            m_thread_id = std::this_thread::get_id();
-
-            for (;;) {
+            while (!m_kill_request) {
                 thinking();
                 aquire_forks();
                 eating();
             }
+            throw Death();
+        } catch (Death const&) {
+            this->state(States::dead);
         } catch (...) {
             std::cerr << "Catch unhandled exception in philosopher id=" << id() << std::endl;
         }
@@ -140,12 +159,6 @@ public:
         state()const
     {
         return m_state;
-    }
-
-    std::thread::id
-        thread_id()const
-    {
-        return m_thread_id;
     }
 
 private:
@@ -190,13 +203,12 @@ private:
 #ifdef PHILOSOPHERS_STARVATION
         using namespace std::chrono;
         milliseconds const time_span = duration_cast<milliseconds>(steady_clock::now() - this->m_last_eating);
+
         if (milliseconds(m_death_threshold * g_max_interval_ms) < time_span) {
-            state(States::dead);
-            for (;;) {
-                std::this_thread::sleep_for(milliseconds(g_max_interval_ms));
-            }
+            throw Death();
         }
-#endif            
+
+#endif
     }
 
     void
@@ -243,14 +255,10 @@ private:
 
     unsigned m_id;
     States m_state;
-
-public:
     std::shared_ptr<Fork> m_p_left_fork;
     std::shared_ptr<Fork> m_p_right_fork;
-
-private:
+    bool volatile m_kill_request;
     Monitor* m_p_monitor;
-    std::thread::id m_thread_id;
 
 #ifdef PHILOSOPHERS_STARVATION
     steady_clock::time_point m_last_eating;
@@ -286,7 +294,7 @@ public:
         decltype(m_log_queue) work_log;
 
         for (;;) {
-            if (!m_log_queue.empty()) {
+            if (!this->m_log_queue.empty()) {
                 {
                     std::lock_guard<decltype(this->m_log_queue_mutex)> locker(this->m_log_queue_mutex);
                     std::swap(work_log, m_log_queue);
@@ -351,10 +359,13 @@ public:
     void
         operator()()
     {
+        std::vector<std::thread> threads;
+        threads.reserve(this->m_philosophers.size());
+
         try {
-            std::vector<std::thread> threads;
-            threads.reserve(this->m_philosophers.size());
-            auto const thread_creator = [](std::shared_ptr<Philosopher> const & ptr) {return std::thread(Philosopher::worker, ptr); };
+            auto const thread_creator = [](std::shared_ptr<Philosopher> const & ptr) {
+                return std::thread(Philosopher::worker, ptr);
+            };
             std::transform(this->m_philosophers.cbegin(), m_philosophers.cend(),
                            std::back_inserter(threads),
                            thread_creator);
@@ -363,6 +374,14 @@ public:
             std::cerr << "Catch std::exception:" << _excp.what() << std::endl;
         } catch (...) {
             std::cerr << "Catch Unknown exception!" << std::endl;
+        }
+
+        for (auto p : this->m_philosophers) {
+            p->kill();
+        }
+
+        for (auto& thr : threads) {
+            thr.join();
         }
 
         throw std::logic_error("Unexpected exit");
@@ -454,6 +473,7 @@ private:
             return '#';
             break;
 #endif
+
         default:
             return '?';
             break;
