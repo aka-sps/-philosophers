@@ -3,6 +3,12 @@ cmake_minimum_required(VERSION 3.0)
 project(philosophers
     VERSION 1.1)
 
+enable_testing()
+
+set(CMAKE_THREAD_PREFER_PTHREAD ON)
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads)
+
 find_package(Git)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -22,7 +28,8 @@ endif(Git_FOUND)
 add_library(git-based-version INTERFACE)
 target_compile_definitions(git-based-version INTERFACE GIT_DESCRIBE="${GIT_DESCRIBE}")
 
-set(CXX_USED_FEATURES
+add_library(cxx-interface INTERFACE)
+target_compile_features(cxx-interface INTERFACE
     cxx_strong_enums
     cxx_decltype
     cxx_lambdas
@@ -30,10 +37,14 @@ set(CXX_USED_FEATURES
     cxx_override
     cxx_nullptr
 )
-
-add_library(cxx-interface INTERFACE)
-target_compile_features(cxx-interface INTERFACE ${CXX_USED_FEATURES})
-#set_property(TARGET cxx-interface PROPERTY CXX_STANDARD 11)
+if(Threads_FOUND)
+    target_link_libraries(cxx-interface INTERFACE Threads::Threads)
+elseif(CMAKE_CROSSCOMPILING AND CMAKE_HAVE_PTHREAD_H AND (CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    target_compile_options(cxx-interface INTERFACE "-pthread")
+    set_target_properties(cxx-interface PROPERTIES LINK_FLAGS "-pthread")
+else()
+    message(SEND_ERROR "Undefined Threads")
+endif()
 
 set(PHILOSOPHERS_STARVATION 1 CACHE BOOL "Define philosophers starvation")
 
